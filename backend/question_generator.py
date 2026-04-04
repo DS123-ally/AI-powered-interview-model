@@ -1,7 +1,7 @@
 """
 question_generator.py
 ─────────────────────
-Generates tailored interview questions using OpenAI (ChatCompletion-compatible)
+Generates tailored interview questions using Ollama (llama3) locally
 based on a candidate's qualification and the job description they applied for.
 
 Returns a structured list of questions focused on communication skill assessment
@@ -16,11 +16,6 @@ import re
 import json
 import logging
 import requests
-import ssl
-from requests.adapters import HTTPAdapter
-from urllib3.util import ssl_ as urllib3_ssl
-from urllib3.poolmanager import PoolManager
-from groq import Groq
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +42,7 @@ COMPLEXITY_RULES = [
 
 class questionGenerator:
     """
-    Uses an OpenAI ChatCompletion-compatible API to generate a personalised set of
+    Uses Ollama's local API (llama3) to generate a personalised set of
     interview questions for a candidate, each paired with a predicted
     answer duration so the frontend can set dynamic recording windows.
     """
@@ -55,24 +50,13 @@ class questionGenerator:
     DEFAULT_QUESTION_COUNT = 5
 
     def __init__(self, api_key=None):
-        # ── FIX: safely resolve API key — never call .strip() on None ─
-        # Resolve GROQ API key and create a Groq client when available
-        raw_key = (api_key or os.getenv("GROQ_API_KEY") or "").strip()
-        self.api_key = raw_key
-        self.groq_client = Groq(api_key=raw_key) if raw_key else None
+        # Allow overriding model and endpoint via env vars
+        self.model = os.getenv("OLLAMA_MODEL", "llama3")
+        base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip('/')
+        self.endpoint = f"{base}/api/chat"
+        self.timeout = 60
 
-        # Allow overriding model via env var (GROQ-compatible name)
-        self.model   = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-        # Resolve endpoint/base
-        base = os.getenv("GROQ_API_BASE",  "https://api.groq.com").rstrip('/')
-        self.endpoint = f"{base}/chat/completions"
-        self.timeout = 30
-        self.verify  = not bool(os.getenv("GROQ_INSECURE", os.getenv("OPENAI_INSECURE", "")).lower() in ("1", "true", "yes"))
-
-        if self.groq_client:
-            logger.info("🔐 Groq client initialized for question generation")
-        else:
-            logger.info("⚠️ No GROQ_API_KEY provided; falling back to local heuristics")
+        logger.info(f"🦙 Ollama question generator initialized using model {self.model} at {self.endpoint}")
 
     # ──────────────────────────────────────────────────────────────
     # Public API
@@ -91,26 +75,22 @@ class questionGenerator:
             {
               "questions":       ["Q1", "Q2", ...],
               "timings_ms":      [60000, 90000, ...],
-              "generation_method": "ai" | "fallback",
+              "generation_method": "ai-ollama" | "fallback",
               "error": "..."   (only present on failure)
             }
         """
-        if not self.api_key:
-            logger.warning("No API key — using fallback questions")
-            return self._fallback(qualification, job_description)
-
         try:
-            logger.info(f"🚀 Starting question generation (count={question_count}, model={self.model})")
+            logger.info(f"🚀 Starting question generation with Ollama (count={question_count}, model={self.model})")
             prompt = self._build_prompt(qualification, job_description, candidate_name, question_count)
             raw    = self._call_api(prompt)
-            logger.info(f"✅ API returned response (length: {len(raw)} chars)")
+            logger.info(f"✅ Ollama returned response (length: {len(raw)} chars)")
 
             parsed    = self._parse_response(raw)
             questions = parsed.get("questions", [])
             timings   = parsed.get("timings_ms", [])
 
             if not questions:
-                logger.warning("AI returned no parseable questions — using fallback")
+                logger.warning("Ollama returned no parseable questions — using fallback")
                 return self._fallback(qualification, job_description)
 
             timings = self._normalise_timings(timings, len(questions))
@@ -119,8 +99,14 @@ class questionGenerator:
             return {
                 "questions":         questions,
                 "timings_ms":        timings,
-                "generation_method": "ai",
+                "generation_method": "ai-ollama",
             }
+
+        except requests.exceptions.ConnectionError:
+            logger.error(f"❌ Connection error: Could not reach Ollama at {self.endpoint}. Is it running?")
+            fallback = self._fallback(qualification, job_description)
+            fallback["error"] = "Cannot connect to local Ollama instance."
+            return fallback
 
         except Exception as exc:
             logger.error(f"❌ Question generation failed: {exc}", exc_info=True)
@@ -171,93 +157,28 @@ The arrays must be the same length ({question_count} items each).
 """
 
     def _call_api(self, prompt: str) -> str:
-        headers = {
-            "Content-Type":  "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
+        headers = {"Content-Type": "application/json"}
         payload = {
-            "model":       self.model,
-            "messages":    [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
-            "max_tokens":  1000,
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "format": "json",
+            "stream": False,
+            "options": {
+                "temperature": 0.7
+            }
         }
 
-        try:
-            logger.info(f"OpenSSL: {getattr(ssl, 'OPENSSL_VERSION', 'unknown')}")
-        except Exception:
-            pass
-
-        # First attempt: standard requests
-        resp = None
-        try:
-            resp = requests.post(
-                self.endpoint, headers=headers, json=payload,
-                timeout=self.timeout, verify=self.verify
-            )
-        except requests.exceptions.SSLError as e:
-            logger.error(f"SSL/TLS handshake failed, trying TLSAdapter fallback", exc_info=True)
-            try:
-                class TLSAdapter(HTTPAdapter):
-                    def init_poolmanager(self, connections, maxsize, block=False, **kw):
-                        ctx = urllib3_ssl.create_urllib3_context()
-                        try:
-                            ctx.options |= getattr(ssl, 'OP_NO_TLSv1', 0) | getattr(ssl, 'OP_NO_TLSv1_1', 0)
-                        except Exception:
-                            pass
-                        kw['ssl_context'] = ctx
-                        self.poolmanager = PoolManager(
-                            num_pools=connections, maxsize=maxsize, block=block, **kw
-                        )
-
-                session = requests.Session()
-                session.trust_env = False
-                session.mount('https://', TLSAdapter())
-                resp = session.post(
-                    self.endpoint, headers=headers, json=payload,
-                    timeout=self.timeout, verify=self.verify
-                )
-            except requests.exceptions.SSLError as e2:
-                raise RuntimeError(
-                    "SSL handshake failed. Try: 1) upgrade Python/OpenSSL; "
-                    "2) disable HTTPS scanning in AV/firewall; "
-                    "3) set GROQ_INSECURE=1 for local testing only."
-                ) from e2
-
-        logger.info(f"API response status: {resp.status_code}")
-
-        if resp.status_code == 401:
-            raise RuntimeError(
-                f"401 Unauthorized — GROQ_API_KEY is invalid or expired. "
-                f"Key preview: {self.api_key[:12]}... "
-                f"Visit https://www.groq.ai/docs/getting-started to check your key."
-            )
-
-        if resp.status_code == 429:
-            text = resp.text or ""
-            raise RuntimeError(
-                f"429 Rate limit / quota exceeded: {text[:300]}. "
-                "Check billing at your Groq account dashboard or https://www.groq.ai/docs"
-            )
-
-        # Model-not-found: retry with safe fallback
-        if resp.status_code == 400:
-            text = resp.text or ""
-            if "model" in text.lower() and resp.status_code == 400:
-                fallback_model = os.getenv("GROQ_MODEL_FALLBACK","llama-3.1-70b-versatile")
-                if payload.get("model") != fallback_model:
-                    logger.warning(f"Model '{payload['model']}' not found; retrying with '{fallback_model}'")
-                    payload["model"] = fallback_model
-                    resp = requests.post(
-                        self.endpoint, headers=headers, json=payload,
-                        timeout=self.timeout, verify=self.verify
-                    )
+        resp = requests.post(
+            self.endpoint, headers=headers, json=payload,
+            timeout=self.timeout
+        )
 
         if resp.status_code != 200:
-            raise RuntimeError(f"API returned {resp.status_code}: {resp.text[:300]}")
+            raise RuntimeError(f"Ollama API returned {resp.status_code}: {resp.text[:300]}")
 
-        data    = resp.json()
-        content = data["choices"][0]["message"]["content"].strip()
-        logger.info(f"Successfully retrieved {len(content)} chars from API")
+        data = resp.json()
+        content = data.get("message", {}).get("content", "").strip()
+        logger.info(f"Successfully retrieved {len(content)} chars from Ollama")
         return content
 
     def _parse_response(self, raw: str) -> dict:
@@ -267,14 +188,14 @@ The arrays must be the same length ({question_count} items each).
         - JSON wrapped in ```json ... ```
         - Fallback: extract question-looking lines + use heuristic timing
         """
-        clean = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
+        clean = re.sub(r"```*(?:json)?", "", raw).strip().rstrip("`").strip()
 
         try:
             parsed = json.loads(clean)
             if isinstance(parsed, dict):
                 questions  = parsed.get("questions", [])
                 seconds    = parsed.get("predicted_seconds", [])
-                timings_ms = [int(s) * 1000 for s in seconds if isinstance(s, (int, float))]
+                timings_ms = [int(s) * 1000 for s in seconds if isinstance(s, (int, float, str)) and str(s).isdigit()]
                 return {"questions": questions, "timings_ms": timings_ms}
 
             if isinstance(parsed, list):

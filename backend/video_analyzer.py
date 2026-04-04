@@ -129,17 +129,12 @@ class VideoAnalyzer:
     """High-level interface for video analysis with OpenAI API assessment"""
 
     def __init__(self, api_key: Optional[str] = None, endpoint: Optional[str] = None):
-        # ── Resolve GROQ API key and create Groq client ─
-        raw_key = (api_key or os.getenv("GROQ_API_KEY") or "").strip()
-        self.api_key = raw_key
-        self.groq_client = Groq(api_key=raw_key) if raw_key else None
-        base = os.getenv("GROQ_API_BASE", "https://api.groq.com").rstrip('/')
-        self.endpoint = endpoint or f"{base}/chat/completions"
+        self.model = os.getenv("OLLAMA_MODEL", "llama3")
+        base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip('/')
+        self.endpoint = endpoint or f"{base}/api/chat"
+        self.use_ai = True
 
-        if not self.groq_client:
-            logger.warning("⚠️  GROQ_API_KEY not set — will return rule-based assessment only")
-        else:
-            logger.info("✅ VideoAnalyzer ready (Groq client initialized)")
+        logger.info(f"✅ VideoAnalyzer ready (Ollama {self.model})")
 
     def analyze_video(self, video_path: str) -> dict:
         try:
@@ -155,7 +150,7 @@ class VideoAnalyzer:
             )
 
             assessment = {}
-            if self.api_key:
+            if self.use_ai:
                 try:
                     assessment = self._generate_ai_assessment(metrics)
                     logger.info("✅ AI assessment complete")
@@ -170,7 +165,7 @@ class VideoAnalyzer:
             return {
                 "raw_metrics":     metrics,
                 "assessment":      assessment,
-                "analysis_method": "ai" if (self.api_key and "_ai_error" not in assessment) else "rule_based",
+                "analysis_method": "ai" if (self.use_ai and "_ai_error" not in assessment) else "rule_based",
             }
 
         except Exception as e:
@@ -178,9 +173,6 @@ class VideoAnalyzer:
             return {"error": str(e)}
 
     def _generate_ai_assessment(self, metrics: dict) -> dict:
-        if not self.api_key:
-            raise RuntimeError("No API key available for AI assessment")
-
         eye_contact_pct = round(metrics['eye_contact_rate'] * 100, 2)
 
         prompt = f"""You are a Professional Interview Communication Coach.
@@ -222,43 +214,30 @@ Return ONLY valid JSON in this exact format (no markdown, no extra text):
 CRITICAL: Return ONLY the JSON object. No markdown code blocks. No explanatory text.
 """
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type":  "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
         payload = {
-            "model":       "gpt-4o-mini",
-            "messages":    [{"role": "user", "content": prompt}],
-            "temperature": 0.3,
-            "max_tokens":  1000,
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "format": "json",
+            "stream": False,
+            "options": {"temperature": 0.3}
         }
 
-        logger.info("🌐 Calling Groq API for video assessment")
-        resp = requests.post(self.endpoint, headers=headers, json=payload, timeout=30)
-
-        if resp.status_code == 401:
-                raise RuntimeError("401 Unauthorized — GROQ_API_KEY is invalid or expired")
-        if resp.status_code == 429:
-            raise RuntimeError(f"429 Rate limit / quota exceeded: {resp.text[:200]}")
-
+        logger.info(f"🌐 Calling Ollama for video assessment (model={self.model})")
+        resp = requests.post(self.endpoint, headers=headers, json=payload, timeout=60)
         resp.raise_for_status()
         data = resp.json()
 
-        choices = data.get("choices", [])
-        if not choices:
-            raise RuntimeError(f"No choices in Groq response: {data}")
-
-        content = choices[0].get("message", {}).get("content", "")
+        content = data.get("message", {}).get("content", "").strip()
         if not content:
-            raise RuntimeError("Empty content from Groq response")
+            raise RuntimeError("Empty content from Ollama response")
 
-        content = content.strip()
         if content.startswith("```"):
             content = content.split("\n", 1)[1] if "\n" in content else content
             content = content.rsplit("```", 1)[0] if "```" in content else content
 
         result = json.loads(content)
-        logger.info("✅ Parsed Groq JSON successfully")
+        logger.info("✅ Parsed Ollama JSON successfully")
         return result
 
     def _fallback_assessment(self, metrics: dict) -> dict:

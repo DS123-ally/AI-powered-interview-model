@@ -57,21 +57,12 @@ class InterviewScorer:
     """Generates comprehensive interview scores — with API or rule-based fallback"""
 
     def __init__(self, api_key: Optional[str] = None, endpoint: Optional[str] = None):
-        # ── Resolve GROQ API key and create Groq client ─
-        raw_key = (api_key or os.getenv("GROQ_API_KEY") or "").strip()
-        if raw_key and len(raw_key) < 10:
-            logger.warning("⚠️ Provided GROQ key looks too short — check your env var")
-        self.api_key = raw_key
-        self.groq_client = Groq(api_key=raw_key) if raw_key else None
-        base = os.getenv("GROQ_API_BASE",  "https://api.groq.com").rstrip('/')
-        self.endpoint = endpoint or f"{base}/chat/completions"
+        self.model = os.getenv("OLLAMA_MODEL", "llama3")
+        base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip('/')
+        self.endpoint = endpoint or f"{base}/api/chat"
+        self.use_ai = True
 
-        if self.groq_client:
-            logger.info("🔐 Groq client initialized for InterviewScorer")
-        else:
-            logger.warning("⚠️ No GROQ_API_KEY found — AI scoring disabled; using fallback scorer")
-
-        logger.info("📊 InterviewScorer v3.0 ready")
+        logger.info(f"📊 InterviewScorer v3.0 ready (Ollama {self.model})")
 
     # ══════════════════════════════════════════════════════════════
     # PUBLIC
@@ -87,7 +78,7 @@ class InterviewScorer:
             ai_raw_text = ""
             used_ai    = False
 
-            if self.api_key:
+            if self.use_ai:
                 try:
                     tone_summary = self._format_tone_data(tone_analysis)
                     prompt       = self._create_scoring_prompt(question, transcript, tone_summary, local_metrics)
@@ -455,60 +446,29 @@ FEEDBACK:
     # API CALL
     # ══════════════════════════════════════════════════════════════
     def _call_api(self, prompt: str) -> str:
-        if not self.api_key:
-            raise RuntimeError("No API key — cannot call AI scoring")
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type":  "application/json",
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "options": {"temperature": 0.3}
         }
-
-        for model in ("llama-3.1-8b-instant"):
-            payload = {
-                "model":       model,
-                "messages":    [{"role": "user", "content": prompt}],
-                "max_tokens":  1000,
-                "temperature": 0.3,
-            }
-            try:
-                logger.info(f"🌐 Calling {self.endpoint} (model={model})")
-                resp = requests.post(self.endpoint, headers=headers, json=payload, timeout=35)
-
-                if resp.status_code == 401:
-                    raise RuntimeError(
-                        f"401 Unauthorized — API key is invalid or expired. "
-                        f"Key preview: {self.api_key[:12]}... "
-                        f"Please check your GROQ_API_KEY at https://www.groq.ai/docs/getting-started"
-                    )
-                if resp.status_code in (429, 500, 502, 503):
-                    logger.warning(f"⚠️  {resp.status_code} on {model}, trying next model…")
-                    continue
-
-                resp.raise_for_status()
-                data = resp.json()
-
-                choices = data.get("choices", [])
-                if choices:
-                    content = choices[0].get("message", {}).get("content", "")
-                    if content and content.strip():
-                        logger.info(f"✅ Response from {model} ({len(content)} chars)")
-                        return content.strip()
-
-                for key in ("response", "output", "text", "completion"):
-                    if isinstance(data.get(key), str) and data[key].strip():
-                        return data[key].strip()
-
-                logger.warning(f"Unexpected response shape: {str(data)[:200]}")
-                return json.dumps(data)
-
-            except RuntimeError:
-                raise
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Request error ({model}): {e}")
-                if model == "gpt-4o":
-                    raise
-
-        raise RuntimeError("All API models failed")
+        
+        try:
+            logger.info(f"🌐 Calling Ollama {self.endpoint} (model={self.model})")
+            resp = requests.post(self.endpoint, headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+            content = data.get("message", {}).get("content", "")
+            if not content.strip():
+                raise RuntimeError("Empty response from Ollama")
+            
+            logger.info(f"✅ Response from Ollama ({len(content)} chars)")
+            return content.strip()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ollama request error: {e}")
+            raise RuntimeError("Ollama API failed") from e
 
     # ══════════════════════════════════════════════════════════════
     # RESPONSE PARSER

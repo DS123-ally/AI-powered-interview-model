@@ -7,6 +7,9 @@ let videoRecorder = null;
 let videoChunks = [];
 let permissionStream = null;  // Held open from the one-time camera permission request
 
+let faceDetection = null;
+let isDetectingFaces = false;
+
 let interviewActive = false;
 let answers = [];
 let recordingTimeout;
@@ -100,7 +103,42 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.warn('⚠️ Could not get camera permission upfront:', err.message);
         permissionStream = null;
     }
+
+    // ── Initialize MediaPipe Face Detection ──────────────
+    try {
+        faceDetection = new FaceDetection({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`;
+        }});
+        faceDetection.setOptions({
+            model: 'short',
+            minDetectionConfidence: 0.5
+        });
+        faceDetection.onResults(onFaceResults);
+    } catch (e) {
+        console.warn('⚠️ Face detection init failed; distraction alerts won\'t run:', e);
+    }
 });
+
+function onFaceResults(results) {
+    const alertBox = document.getElementById('distractionAlert');
+    if (!isDetectingFaces || !alertBox) return;
+    
+    if (!results.detections || results.detections.length !== 1) {
+        alertBox.style.display = 'block';
+    } else {
+        alertBox.style.display = 'none';
+    }
+}
+
+function processVideoFrame() {
+    const video = document.getElementById('videoPreview');
+    if (isDetectingFaces && video && !video.paused && !video.ended) {
+        if (faceDetection) {
+            faceDetection.send({image: video}).catch(e => console.warn('Face track err', e));
+        }
+        setTimeout(processVideoFrame, 300); // Check 3-4 times a second
+    }
+}
 
 function setPill(state, text) {
     if (!statusPill) return;
@@ -436,6 +474,10 @@ async function startRecording() {
             recordingTimeout = setTimeout(() => {
                 if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
             }, currentQuestionTimingMs);
+
+            // Start processing faces
+            isDetectingFaces = true;
+            processVideoFrame();
         };
 
         mediaRecorder.start();
@@ -458,6 +500,10 @@ function stopRecording() {
 
         const videoCard = document.getElementById('videoPreviewCard');
         if (videoCard) videoCard.style.display = 'none';
+
+        isDetectingFaces = false;
+        const alertBox = document.getElementById('distractionAlert');
+        if (alertBox) alertBox.style.display = 'none';
 
         mediaRecorder.onstop = async () => { await sendMediaToBackend(); };
     }

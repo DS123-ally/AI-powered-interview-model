@@ -185,7 +185,7 @@
 
     /* Stats */
     .stats-grid {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%;
+      display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; width: 100%;
     }
     .stat-box {
       background: rgba(255,255,255,0.03);
@@ -327,6 +327,8 @@
       content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
     }
     .session-card.completed::before { background: linear-gradient(90deg, var(--green), transparent); }
+    .session-card.completed .card-title { text-decoration: line-through; color: var(--text-dim); }
+    .session-card.completed .card-desc { text-decoration: line-through; opacity: 0.7; }
     .session-card.active::before   { background: linear-gradient(90deg, var(--accent), transparent); }
     .session-card.locked::before   { background: linear-gradient(90deg, var(--text-dim), transparent); }
     .session-card:hover { border-color: rgba(56,189,248,0.25); transform: translateY(-2px); }
@@ -526,6 +528,23 @@
 
     <div class="sidebar-divider"></div>
 
+    <!-- Stats -->
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div class="stat-num" id="statCompleted">0</div>
+        <div class="stat-label">Interviews</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" id="statStreak" style="color:var(--green);">0</div>
+        <div class="stat-label">Day Streak</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num"><span id="statAvgScore">0</span></div>
+        <div class="stat-label">Avg Score</div>
+      </div>
+    </div>
+
+    <div class="sidebar-divider"></div>
 
     <!-- Skills -->
     <div class="skill-tags">
@@ -986,10 +1005,20 @@ function calcStreak() {
   const d = new Date();
   while (true) {
     const key = d.toISOString().slice(0,10);
+    // As long as the day has an entry, we count it towards the streak
     if (activity[key]) { streak++; d.setDate(d.getDate()-1); }
-    else break;
+    else { 
+      // check if missed today but had one yesterday
+      if (streak === 0) {
+          d.setDate(d.getDate()-1);
+          const yKey = d.toISOString().slice(0,10);
+          if (activity[yKey]) { streak++; d.setDate(d.getDate()-1); continue; }
+      }
+      break; 
+    }
   }
-  document.getElementById('statStreak').textContent = streak;
+  const streakEl = document.getElementById('statStreak');
+  if (streakEl) streakEl.textContent = streak;
 }
 
 // Seed demo activity for heatmap visual
@@ -1017,6 +1046,7 @@ document.addEventListener('DOMContentLoaded', () => {
   seedDemoActivity();
   buildHeatmap();
   buildSessionCards();
+  calcStreak();
 });
 </script>
 </body>
