@@ -9,3 +9,4 @@ opencv-python
 mediapipe
 requests
 groq
+pymongo

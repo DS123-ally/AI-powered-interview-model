@@ -120,7 +120,7 @@ class ToneAnalyzer:
         try:
             # Detect onsets (syllable-like events)
             onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-            onsets = librosa.onset.onset_detect(onset_env=onset_env, sr=sr, units='time')
+            onsets = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr, units='time')
             
             # Duration of audio
             duration = len(y) / sr
@@ -161,7 +161,7 @@ class ToneAnalyzer:
         """Extract tempo information"""
         try:
             onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-            tempo, beats = librosa.beat.beat_track(onset_env=onset_env, sr=sr)
+            tempo, beats = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr)
             
             return {
                 "estimated_tempo": float(tempo),

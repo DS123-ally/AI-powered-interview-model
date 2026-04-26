@@ -21,6 +21,7 @@ from tone_analyzer import ToneAnalyzer
 from interview_scorer import InterviewScorer
 from video_analyzer import VideoAnalyzer
 from question_generator import questionGenerator
+from mongo_store import MongoStore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ tone_analyzer      = ToneAnalyzer()
 interview_scorer   = InterviewScorer(api_key=_key_or_none)
 video_analyzer     = VideoAnalyzer(api_key=_key_or_none)
 question_generator = questionGenerator(api_key=_key_or_none)
+mongo_store = MongoStore()
 
 # ══════════════════════════════════════════════════════════════════
 # Default Question Set  (fallback when no candidate email given)
@@ -210,9 +212,25 @@ async def generate_questions(candidate: CandidateRegistration):
     if not questions:
         raise HTTPException(500, "Failed to generate interview questions")
 
+    normalized_email = candidate.email.strip().lower()
+    mongo_store.upsert_candidate({
+        "name": candidate.name,
+        "email": normalized_email,
+        "qualification": candidate.qualification,
+        "job_description": candidate.job_description,
+        "question_count": candidate.question_count,
+    })
+    session_id = mongo_store.save_session_questions(
+        candidate_email=normalized_email,
+        candidate_name=candidate.name,
+        questions=questions,
+        timings_ms=timings_ms,
+        generation_method=method,
+    )
+
     # Store both questions and their timings
-    candidate_question_store[candidate.email] = questions
-    candidate_timing_store[candidate.email]   = timings_ms
+    candidate_question_store[normalized_email] = questions
+    candidate_timing_store[normalized_email]   = timings_ms
 
     logger.info(
         f"✅ {len(questions)} questions + {len(timings_ms)} timings stored for "
@@ -222,12 +240,13 @@ async def generate_questions(candidate: CandidateRegistration):
 
     payload = {
         "status":             "success",
-        "candidate_email":    candidate.email,
+        "candidate_email":    normalized_email,
         "candidate_name":     candidate.name,
         "questions":          questions,
         "timings_ms":         timings_ms,
         "question_count":     len(questions),
         "generation_method":  method,
+        "session_id":         session_id,
     }
     if error:
         payload["warning"] = error
@@ -246,14 +265,16 @@ def get_question(
     Returns the next interview question for a candidate together with
     the AI-predicted recording time for that question (in milliseconds).
     """
+    normalized_email = candidate_email.strip().lower() if candidate_email else ""
+
     questions = (
-        candidate_question_store.get(candidate_email)
+        candidate_question_store.get(normalized_email)
         if candidate_email
         else None
     ) or DEFAULT_HR_QUESTIONS
 
     timings = (
-        candidate_timing_store.get(candidate_email)
+        candidate_timing_store.get(normalized_email)
         if candidate_email
         else None
     ) or DEFAULT_HR_TIMINGS_MS
@@ -273,7 +294,7 @@ def get_question(
         "question_number": question_number,
         "total_questions": len(questions),
         "timing_ms":       timing_ms,
-        "using_custom":    bool(candidate_email and candidate_email in candidate_question_store),
+        "using_custom":    bool(normalized_email and normalized_email in candidate_question_store),
     }
 
 
@@ -285,6 +306,8 @@ async def analyze_answer(
     audio:    UploadFile = File(...),
     video:    UploadFile = File(None),
     question: str        = Form(""),
+    candidate_email: str = Form(""),
+    question_number: int = Form(-1),
 ):
     logger.info(f"📦 Analyze: audio={audio.filename}, video={video.filename if video else 'none'}")
 
@@ -331,6 +354,19 @@ async def analyze_answer(
         if video_path and video_path.exists():
             video_analysis_result = video_analyzer.analyze_video(str(video_path))
             logger.info(f"🎥 Video analysis result: {video_analysis_result}")
+
+        normalized_email = candidate_email.strip().lower()
+        if normalized_email:
+            mongo_store.append_answer(
+                session_id=MongoStore.session_id_from_email(normalized_email),
+                candidate_email=normalized_email,
+                question_number=question_number if question_number >= 0 else None,
+                question=question,
+                transcript=transcript,
+                tone_analysis=tone_analysis,
+                ai_score=ai_score,
+                video_analysis=video_analysis_result,
+            )
 
         return {
             "transcript":     transcript,

@@ -330,7 +330,7 @@ document.getElementById('registerForm').addEventListener('submit', async functio
   document.getElementById('apiError').classList.remove('visible');
 
   const name    = document.getElementById('name').value.trim();
-  const email   = document.getElementById('email').value.trim();
+  const email   = document.getElementById('email').value.trim().toLowerCase();
   const qual    = document.getElementById('qualification').value.trim();
   const jobDesc = document.getElementById('jobDescription').value.trim();
 
@@ -362,7 +362,7 @@ document.getElementById('registerForm').addEventListener('submit', async functio
 
     const data = await res.json();
 
-    // ── Persist candidate info so index.html can pick it up ──
+    // ── Persist candidate info so interview.html can pick it up ──
     sessionStorage.setItem('candidateEmail', email);
     sessionStorage.setItem('candidateName',  name);
     sessionStorage.setItem('generatedQuestions', JSON.stringify(data.questions || []));
@@ -378,7 +378,7 @@ document.getElementById('registerForm').addEventListener('submit', async functio
     });
 
     setTimeout(() => {
-      window.location.href = 'index.html';
+      window.location.href = 'interview.html';
     }, 2700);
 
   } catch (err) {

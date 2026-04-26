@@ -9,6 +9,7 @@ let permissionStream = null;  // Held open from the one-time camera permission r
 
 let faceDetection = null;
 let isDetectingFaces = false;
+let faceDetectionInFlight = false;
 
 let interviewActive = false;
 let answers = [];
@@ -106,13 +107,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // ── Initialize MediaPipe Face Detection ──────────────
     try {
-        faceDetection = new FaceDetection({locateFile: (file) => {
-            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`;
-        }});
-        faceDetection.setOptions({
-            model: 'short',
-            minDetectionConfidence: 0.5
+        faceDetection = new FaceDetection({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
         });
+
+        // Keep compatibility with different MediaPipe builds.
+        try {
+            faceDetection.setOptions({
+                modelSelection: 0,
+                minDetectionConfidence: 0.5
+            });
+        } catch (_) {
+            faceDetection.setOptions({
+                model: 'short',
+                minDetectionConfidence: 0.5
+            });
+        }
+
         faceDetection.onResults(onFaceResults);
     } catch (e) {
         console.warn('⚠️ Face detection init failed; distraction alerts won\'t run:', e);
@@ -132,12 +143,26 @@ function onFaceResults(results) {
 
 function processVideoFrame() {
     const video = document.getElementById('videoPreview');
-    if (isDetectingFaces && video && !video.paused && !video.ended) {
-        if (faceDetection) {
-            faceDetection.send({image: video}).catch(e => console.warn('Face track err', e));
-        }
-        setTimeout(processVideoFrame, 300); // Check 3-4 times a second
+
+    if (!isDetectingFaces) return;
+
+    // Keep polling while recording so detection starts as soon as video is ready.
+    if (!video || video.paused || video.ended || video.readyState < 2 || !faceDetection) {
+        setTimeout(processVideoFrame, 250);
+        return;
     }
+
+    if (!faceDetectionInFlight) {
+        faceDetectionInFlight = true;
+        faceDetection
+            .send({ image: video })
+            .catch((e) => console.warn('Face track err', e))
+            .finally(() => {
+                faceDetectionInFlight = false;
+            });
+    }
+
+    setTimeout(processVideoFrame, 250); // ~4 checks/second
 }
 
 function setPill(state, text) {
@@ -449,6 +474,11 @@ async function startRecording() {
         if (videoPreview && videoCard) {
             videoPreview.srcObject = stream;
             videoCard.style.display = 'block';
+            try {
+                await videoPreview.play();
+            } catch (e) {
+                console.warn('Video preview play() delayed:', e?.message || e);
+            }
         }
 
         const audioTrack = stream.getAudioTracks()[0];
@@ -477,6 +507,7 @@ async function startRecording() {
 
             // Start processing faces
             isDetectingFaces = true;
+            faceDetectionInFlight = false;
             processVideoFrame();
         };
 
@@ -502,6 +533,7 @@ function stopRecording() {
         if (videoCard) videoCard.style.display = 'none';
 
         isDetectingFaces = false;
+        faceDetectionInFlight = false;
         const alertBox = document.getElementById('distractionAlert');
         if (alertBox) alertBox.style.display = 'none';
 
@@ -519,6 +551,8 @@ async function sendMediaToBackend() {
     formData.append('audio', audioBlob, 'answer.webm');
     if (videoBlob) formData.append('video', videoBlob, 'answer_video.webm');
     formData.append('question', questionText.innerText);
+    formData.append('candidate_email', CANDIDATE_EMAIL || '');
+    formData.append('question_number', String(questionIndex));
 
     try {
         const response = await fetch(`${BACKEND_URL}/analyze-answer`, { method: 'POST', body: formData });
