@@ -6,6 +6,10 @@ let videoStream = null;
 let videoRecorder = null;
 let videoChunks = [];
 let permissionStream = null;  // Held open from the one-time camera permission request
+let liveTranscriptionSession = null;
+let liveAudioContext = null;
+let liveWorkletReady = false;
+let answerHistory = null;
 
 let faceDetection = null;
 let isDetectingFaces = false;
@@ -67,6 +71,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     statusText      = document.getElementById('statusText');
     questionText    = document.getElementById('questionText');
     answerText      = document.getElementById('answerText');
+    answerHistory   = document.getElementById('answerHistory');
     progressText    = document.getElementById('progressText');
     indicator       = document.getElementById('recordingIndicator');
     toneAnalysisBox     = document.getElementById('toneAnalysisBox');
@@ -333,10 +338,15 @@ function displayAIScore(aiScore) {
 // ═══════════════════════════════════════════════════════════════════
 function startInterview() {
     if (isCompleting) return;
+    prepareLiveAudio();
     interviewActive = true;
     answers = [];
     pendingAnalyses.clear();
     questionIndex = 0;
+    if (answerHistory) {
+        answerHistory.innerHTML = '';
+        answerHistory.parentElement.style.display = 'none';
+    }
 
     if (startBtn) startBtn.disabled = true;
     if (skipBtn)  skipBtn.disabled  = false;
@@ -361,6 +371,7 @@ function startInterview() {
 
 async function skipQuestion() {
     if (!interviewActive) return;
+    stopLiveTranscription();
     if (mediaRecorder && mediaRecorder.state === 'recording') {
         clearTimeout(recordingTimeout);
         mediaRecorder.stop();
@@ -377,6 +388,7 @@ async function skipQuestion() {
 
 function stopInterview() {
     if (confirm('Are you sure you want to end the interview early?')) {
+        stopLiveTranscription();
         interviewActive = false;
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             clearTimeout(recordingTimeout);
@@ -472,6 +484,209 @@ function speakQuestion(text) {
     });
 }
 
+function prepareLiveAudio() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return null;
+    try {
+        if (!liveAudioContext || liveAudioContext.state === 'closed') {
+            liveAudioContext = new AudioContextClass();
+            liveWorkletReady = false;
+        }
+        // This runs directly in the Start Interview click handler so the browser permits audio processing.
+        liveAudioContext.resume().catch(error => console.warn('Live audio could not start:', error));
+        return liveAudioContext;
+    } catch (error) {
+        console.warn('Live audio unavailable:', error);
+        return null;
+    }
+}
+
+function closeLiveAudio() {
+    const context = liveAudioContext;
+    liveAudioContext = null;
+    liveWorkletReady = false;
+    context?.close().catch(() => {});
+}
+
+function updateAnswerHistory(index, text) {
+    if (!answerHistory) return;
+    let item = answerHistory.querySelector(`[data-answer-index="${index}"]`);
+    if (!item) {
+        item = document.createElement('div');
+        item.className = 'answer-history-item';
+        item.dataset.answerIndex = String(index);
+        const title = document.createElement('strong');
+        title.textContent = `Answer ${index + 1}`;
+        const body = document.createElement('p');
+        body.className = 'answer-history-text';
+        item.append(title, body);
+        answerHistory.append(item);
+        answerHistory.parentElement.style.display = 'block';
+    }
+    item.querySelector('.answer-history-text').textContent = text;
+}
+
+function enqueueLiveAudio(session, buffer) {
+    if (!session.active || !buffer.byteLength) return;
+    session.queue = session.queue.then(async () => {
+        if (!session.active) return;
+        const controller = new AbortController();
+        session.controller = controller;
+        try {
+            const url = `${BACKEND_URL}/transcribe-live?sample_rate=${session.context.sampleRate}`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/octet-stream' },
+                body: buffer,
+                signal: controller.signal
+            });
+            if (!response.ok) throw new Error(`Live transcription HTTP ${response.status}`);
+            const data = await response.json();
+            const text = (data.text || '').trim();
+            if (text && session.active) {
+                session.text = `${session.text} ${text}`.trim();
+                if (questionIndex === session.index && mediaRecorder?.state === 'recording') {
+                    answerText.innerText = session.text;
+                }
+                if (!session.finalTranscriptReady) updateAnswerHistory(session.index, session.text);
+                session.onText?.(session.text);
+            }
+        } finally {
+            if (session.controller === controller) session.controller = null;
+        }
+    }).catch(error => {
+        if (!session.active || error.name === 'AbortError') return;
+        console.warn('Live Whisper captions stopped:', error);
+        stopLiveTranscription(session);
+        if (questionIndex === session.index && mediaRecorder?.state === 'recording') {
+            answerText.innerText = 'Live captions unavailable; your answer is still being recorded.';
+        }
+    });
+}
+
+async function startLiveTranscription(audioTrack, index) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    const session = { index, active: true, queue: Promise.resolve(), text: '', controller: null };
+    liveTranscriptionSession = session;
+    answerText.innerText = 'Listening… live captions will appear here.';
+    updateAnswerHistory(index, 'Listening…');
+
+    try {
+        const context = liveAudioContext || new AudioContextClass();
+        session.context = context;
+        const source = context.createMediaStreamSource(new MediaStream([audioTrack]));
+        session.source = source;
+
+        if (context.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+            if (!liveWorkletReady) {
+                await context.audioWorklet.addModule('live-whisper-worklet.js');
+                liveWorkletReady = true;
+            }
+            if (!session.active) return;
+            const node = new AudioWorkletNode(context, 'live-whisper-chunks', {
+                processorOptions: { chunkSeconds: 3 }
+            });
+            node.port.onmessage = event => {
+                if (event.data?.type === 'flushed') {
+                    session.queue.then(() => session.finish?.());
+                } else {
+                    enqueueLiveAudio(session, event.data);
+                }
+            };
+            session.node = node;
+            source.connect(node);
+            node.connect(context.destination);
+        } else if (context.createScriptProcessor) {
+            const node = context.createScriptProcessor(4096, 1, 1);
+            let parts = [];
+            let frames = 0;
+            session.flush = () => {
+                if (frames >= context.sampleRate) {
+                    const chunk = new Float32Array(frames);
+                    let offset = 0;
+                    for (const saved of parts) {
+                        chunk.set(saved, offset);
+                        offset += saved.length;
+                    }
+                    enqueueLiveAudio(session, chunk.buffer);
+                }
+                parts = [];
+                frames = 0;
+            };
+            node.onaudioprocess = event => {
+                if (!session.active) return;
+                const part = new Float32Array(event.inputBuffer.getChannelData(0));
+                parts.push(part);
+                frames += part.length;
+                if (frames >= context.sampleRate * 3) {
+                    const chunk = new Float32Array(frames);
+                    let offset = 0;
+                    for (const saved of parts) {
+                        chunk.set(saved, offset);
+                        offset += saved.length;
+                    }
+                    enqueueLiveAudio(session, chunk.buffer);
+                    parts = [];
+                    frames = 0;
+                }
+            };
+            session.node = node;
+            source.connect(node);
+            node.connect(context.destination);
+        } else {
+            throw new Error('This browser cannot capture live audio chunks');
+        }
+        await context.resume();
+    } catch (error) {
+        console.warn('Live Whisper captions unavailable:', error);
+        stopLiveTranscription(session);
+        if (questionIndex === index && mediaRecorder?.state === 'recording') {
+            answerText.innerText = 'Live captions unavailable; your answer is still being recorded.';
+        }
+    }
+}
+
+function stopLiveTranscription(session = liveTranscriptionSession) {
+    if (!session) return '';
+    if (liveTranscriptionSession === session) liveTranscriptionSession = null;
+    session.active = false;
+    session.controller?.abort();
+    session.node?.disconnect();
+    session.source?.disconnect();
+    if (session.context !== liveAudioContext) session.context?.close().catch(() => {});
+    return session.text;
+}
+
+function finishLiveTranscription(session = liveTranscriptionSession) {
+    if (!session) return Promise.resolve('');
+    if (liveTranscriptionSession === session) liveTranscriptionSession = null;
+    session.source?.disconnect();
+    return new Promise(resolve => {
+        let settled = false;
+        const timeout = setTimeout(() => {
+            session.controller?.abort();
+            settle();
+        }, 30000);
+        const settle = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            session.active = false;
+            session.node?.disconnect();
+            if (session.context !== liveAudioContext) session.context?.close().catch(() => {});
+            resolve(session.text);
+        };
+        session.finish = settle;
+        if (session.node?.port?.postMessage) {
+            session.node.port.postMessage({ type: 'flush' });
+        } else {
+            session.flush?.();
+            session.queue.then(settle);
+        }
+    });
+}
+
 async function startRecording() {
     try {
         // Reuse the upfront permission stream if still active, else request again
@@ -515,6 +730,7 @@ async function startRecording() {
             statusText.innerText = `🎤🎥 Recording… (${timingSeconds}s limit)`;
             setPill('recording', 'REC ●');
             setOrb('recording', 'Listening…');
+            startLiveTranscription(audioTrack, questionIndex);
 
             // Use the per-question AI-predicted timing instead of a fixed 30s
             recordingTimeout = setTimeout(() => {
@@ -538,13 +754,16 @@ async function startRecording() {
 
 function stopRecording() {
     if (mediaRecorder && mediaRecorder.state === 'recording') {
+        const liveSession = liveTranscriptionSession;
+        const liveText = liveSession?.text || '';
+        const liveFinish = finishLiveTranscription(liveSession);
         const completedIndex = questionIndex;
         const completedQuestion = questionText.innerText;
         const videoIsRecording = videoRecorder && videoRecorder.state === 'recording';
         let recordersPending = videoIsRecording ? 2 : 1;
         const recorderStopped = () => {
             recordersPending--;
-            if (recordersPending === 0) sendMediaToBackend(completedIndex, completedQuestion);
+            if (recordersPending === 0) sendMediaToBackend(completedIndex, completedQuestion, liveText, liveFinish, liveSession);
         };
         mediaRecorder.addEventListener('stop', recorderStopped, { once: true });
         if (videoIsRecording) videoRecorder.addEventListener('stop', recorderStopped, { once: true });
@@ -568,11 +787,24 @@ function stopRecording() {
     }
 }
 
-function sendMediaToBackend(completedIndex, completedQuestion) {
+function sendMediaToBackend(completedIndex, completedQuestion, liveText = '', liveFinish = Promise.resolve(liveText), liveSession = null) {
     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
     const videoBlob = videoChunks.length > 0 ? new Blob(videoChunks, { type: 'video/webm' }) : null;
-    const entry = { question: completedQuestion, answer: '(Analysis pending)' };
+    const entry = { question: completedQuestion, answer: liveText || '(Analysis pending)' };
     answers[completedIndex] = entry;
+    updateAnswerHistory(completedIndex, liveText || 'Transcribing the full answer…');
+    if (liveSession) {
+        liveSession.onText = text => {
+            if (!entry.finalized) entry.answer = text;
+        };
+        pendingAnalyses.add(liveFinish);
+        liveFinish.then(text => {
+            if (!entry.finalized && text) {
+                entry.answer = text;
+                updateAnswerHistory(completedIndex, text);
+            }
+        }).finally(() => pendingAnalyses.delete(liveFinish));
+    }
 
     if (audioBlob.size > 0) {
         const formData = new FormData();
@@ -593,10 +825,14 @@ function sendMediaToBackend(completedIndex, completedQuestion) {
                     ai_score: data.ai_score,
                     video_analysis: data.video_analysis
                 });
+                entry.finalized = true;
+                if (liveSession) liveSession.finalTranscriptReady = true;
+                updateAnswerHistory(completedIndex, entry.answer);
             } catch (error) {
                 console.error(`Error processing question ${completedIndex + 1}:`, error);
-                entry.answer = '(Processing failed)';
+                entry.answer = liveSession?.text || liveText || '(Processing failed)';
                 entry.error = error.message;
+                updateAnswerHistory(completedIndex, entry.answer);
             }
         })();
         pendingAnalyses.add(analysis);
@@ -608,6 +844,7 @@ function sendMediaToBackend(completedIndex, completedQuestion) {
         });
     } else {
         entry.answer = '(No audio detected)';
+        updateAnswerHistory(completedIndex, entry.answer);
     }
 
     if (interviewActive) {
@@ -695,6 +932,7 @@ async function completeInterview() {
     if (isCompleting) return;
     isCompleting = true;
     interviewActive = false;
+    stopLiveTranscription();
     statusText.innerText   = 'Interview completed!';
     questionText.innerText = 'Thank you for completing the interview!';
     answerText.innerText   = '';
@@ -709,6 +947,7 @@ async function completeInterview() {
         statusText.innerText = `Finishing ${pendingAnalyses.size} answer analysis request(s)…`;
         await Promise.allSettled([...pendingAnalyses]);
     }
+    closeLiveAudio();
 
     // ── Persist all answer data for report.html ──
     sessionStorage.setItem('interviewAnswers', JSON.stringify(answers));
@@ -723,6 +962,8 @@ async function completeInterview() {
 
 function resetInterview() {
     interviewActive = false;
+    stopLiveTranscription();
+    closeLiveAudio();
     if (startBtn) startBtn.disabled = false;
     if (skipBtn)  skipBtn.disabled  = true;
     if (stopBtn)  stopBtn.disabled  = true;
@@ -893,6 +1134,8 @@ function handleVisibilityChange() {
 
 /** Hard-stop the interview due to a security violation */
 function terminateForTabSwitch() {
+    stopLiveTranscription();
+    closeLiveAudio();
     if (mediaRecorder && mediaRecorder.state === 'recording') {
         clearTimeout(recordingTimeout);
         mediaRecorder.stop();

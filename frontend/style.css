@@ -382,6 +382,30 @@ body::before {
     font-style: italic;
 }
 
+.caption-note {
+    color: var(--text-sub);
+    font-size: 11px;
+    opacity: 0.75;
+}
+
+.answer-history-item + .answer-history-item {
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    margin-top: 14px;
+    padding-top: 14px;
+}
+
+.answer-history-item strong {
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.answer-history-text {
+    color: var(--text-sub);
+    font-size: 14px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+}
+
 /* Reveal animation when cards appear */
 .reveal {
     animation: card-reveal 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;

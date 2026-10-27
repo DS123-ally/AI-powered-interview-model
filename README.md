@@ -6,6 +6,7 @@ An intelligent, fully localized technical and behavioral interview simulation mo
 - **Dynamic Question Generation**: Creates targeted interview questions based on the candidate's profile and CV using the local Ollama LLM.
 - **Three-question interviews**: The next question starts after each recording is saved. Answer scoring continues in the background, and the final report waits for all analysis to finish.
 - **Audio Transcription & Tone Analysis**: Transcribes answers offline via OpenAI's Whisper model (`base` size) and uses `librosa` to analyze speech rates, pitch, and energy.
+- **Live Whisper captions**: While you answer, the browser sends three-second PCM audio chunks to a fast local Whisper `tiny.en` model. Each complete answer stays visible below the question and is replaced by the more accurate `base` model transcript when background analysis finishes. The first run may download the `tiny.en` model (about 72 MB).
 - **AI Scoring & Feedback**: Evaluates the transcribed answers locally on your machine using Ollama (`llama3.1:8b` by default).
 - **Body Language & Video Analysis**: Employs backend OpenCV & MediaPipe techniques to evaluate eye contact, shoulder alignment, and spine angle. 
 - **Real-Time Distraction Alert**: The browser dynamically runs a frontend MediaPipe face detection model from the camera feed while recording, instantly flashing an alert if there are multiple people or zero people in the frame in real-time.

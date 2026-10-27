@@ -9,13 +9,16 @@ AI Voice + Video Interview Backend v4.2
 - /generate-questions: AI-generated, candidate-specific interview questions
 - NEW: per-question dynamic recording timings returned by /get-question
 """
-from fastapi import FastAPI, UploadFile, File, Query, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, Query, HTTPException, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import base64
 from pydantic import BaseModel
 import whisper
-import os, re, shutil, uuid, logging
+import os, re, shutil, uuid, logging, math, threading, time
+import numpy as np
+from scipy.signal import resample_poly
+from starlette.concurrency import run_in_threadpool
 from pathlib import Path
 from tone_analyzer import ToneAnalyzer
 from interview_scorer import InterviewScorer
@@ -56,6 +59,32 @@ app.add_middleware(
 logger.info("Loading Whisper model…")
 model = whisper.load_model("base")
 logger.info("✅ Whisper ready")
+whisper_lock = threading.Lock()
+live_whisper_lock = threading.Lock()
+live_model_name = os.getenv("WHISPER_LIVE_MODEL", "tiny.en")
+try:
+    live_model = whisper.load_model(live_model_name)
+    logger.info("Live captions ready with Whisper %s", live_model_name)
+except Exception as exc:
+    live_model = model
+    logger.warning("Live Whisper model unavailable (%s); using the base model", exc)
+
+
+def transcribe_with_whisper(audio, **options):
+    """Share the local Whisper model safely across live and final transcription."""
+    with whisper_lock:
+        return model.transcribe(audio, fp16=False, language="en", task="transcribe", **options)
+
+
+def transcribe_live_with_whisper(audio):
+    """Use the small caption model without blocking final transcription."""
+    lock = whisper_lock if live_model is model else live_whisper_lock
+    with lock:
+        return live_model.transcribe(
+            audio, fp16=False, language="en", task="transcribe",
+            condition_on_previous_text=False, beam_size=1, best_of=1,
+            temperature=0.0, without_timestamps=True,
+        )
 
 # FIX: pass None when key is empty so modules use their own env-var lookup
 _key_or_none = groq_key if groq_key else None
@@ -290,6 +319,40 @@ def get_question(
 # ══════════════════════════════════════════════════════════════════
 # Route — Analyse Answer
 # ══════════════════════════════════════════════════════════════════
+@app.post("/transcribe-live")
+def transcribe_live(
+    audio: bytes = Body(..., media_type="application/octet-stream"),
+    sample_rate: int = Query(..., ge=8000, le=96000),
+):
+    """Transcribe one short mono Float32 PCM chunk for captions during recording."""
+    if not audio or len(audio) % 4:
+        raise HTTPException(400, "Audio must contain Float32 PCM samples")
+    if len(audio) // 4 > sample_rate * 8:
+        raise HTTPException(413, "Live audio chunk must be at most 8 seconds")
+
+    samples = np.frombuffer(audio, dtype="<f4").astype(np.float32)
+    if not np.all(np.isfinite(samples)):
+        raise HTTPException(400, "Audio contains invalid samples")
+    if samples.size < sample_rate:
+        return {"text": ""}
+    if sample_rate != 16000:
+        divisor = math.gcd(sample_rate, 16000)
+        samples = resample_poly(samples, 16000 // divisor, sample_rate // divisor).astype(np.float32)
+    rms = float(np.sqrt(np.mean(np.square(samples))))
+    if rms < 0.0005:
+        logger.info("Live Whisper: silent %.1fs chunk (rms=%.5f)", samples.size / 16000, rms)
+        return {"text": ""}
+
+    started = time.perf_counter()
+    result = transcribe_live_with_whisper(samples)
+    text = result.get("text", "").strip()
+    logger.info(
+        "Live Whisper: %.1fs chunk, rms=%.5f, %d chars in %.1fs",
+        samples.size / 16000, rms, len(text), time.perf_counter() - started,
+    )
+    return {"text": text}
+
+
 @app.post("/analyze-answer")
 async def analyze_answer(
     audio:    UploadFile = File(...),
@@ -325,23 +388,24 @@ async def analyze_answer(
                 logger.warning("⚠️  Video file empty")
 
         try:
-            result = model.transcribe(str(audio_path), fp16=False, language="en", task="transcribe")
+            result = await run_in_threadpool(transcribe_with_whisper, str(audio_path))
         except FileNotFoundError:
             raise HTTPException(500, "ffmpeg not found — install from https://ffmpeg.org")
 
         transcript    = result.get("text", "").strip()
-        tone_analysis = tone_analyzer.analyze_audio(str(audio_path))
+        tone_analysis = await run_in_threadpool(tone_analyzer.analyze_audio, str(audio_path))
 
         ai_score = {}
         if question and transcript:
-            ai_score = interview_scorer.generate_score(
+            ai_score = await run_in_threadpool(
+                interview_scorer.generate_score,
                 question=question,
                 transcript=transcript,
                 tone_analysis=tone_analysis,
             )
 
         if video_path and video_path.exists():
-            video_analysis_result = video_analyzer.analyze_video(str(video_path))
+            video_analysis_result = await run_in_threadpool(video_analyzer.analyze_video, str(video_path))
             logger.info(f"🎥 Video analysis result: {video_analysis_result}")
 
         normalized_email = candidate_email.strip().lower()

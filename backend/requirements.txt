@@ -5,6 +5,7 @@ python-multipart
 openai-whisper
 librosa
 numpy
+scipy
 opencv-python
 mediapipe
 requests
