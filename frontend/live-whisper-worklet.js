@@ -1,7 +1,7 @@
 class LiveWhisperChunks extends AudioWorkletProcessor {
     constructor(options) {
         super();
-        const seconds = options.processorOptions?.chunkSeconds || 3;
+        const seconds = options.processorOptions?.chunkSeconds || 5;
         this.targetFrames = Math.round(sampleRate * seconds);
         this.parts = [];
         this.frameCount = 0;

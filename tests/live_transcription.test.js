@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-test('audio worklet emits a three-second PCM chunk', () => {
+test('audio worklet emits a five-second PCM chunk', () => {
     let Processor;
     const posted = [];
     class FakeProcessor {
@@ -22,12 +22,12 @@ test('audio worklet emits a three-second PCM chunk', () => {
             Processor = implementation;
         }
     });
-    const processor = new Processor({ processorOptions: { chunkSeconds: 3 } });
-    for (let i = 0; i < 375; i++) {
+    const processor = new Processor({ processorOptions: { chunkSeconds: 5 } });
+    for (let i = 0; i < 625; i++) {
         processor.process([[new Float32Array(128).fill(0.1)]]);
     }
     assert.equal(posted.length, 1);
-    assert.equal(posted[0].byteLength, 3 * 16000 * 4);
+    assert.equal(posted[0].byteLength, 5 * 16000 * 4);
     for (let i = 0; i < 188; i++) {
         processor.process([[new Float32Array(128).fill(0.1)]]);
     }

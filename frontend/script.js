@@ -585,7 +585,7 @@ async function startLiveTranscription(audioTrack, index) {
             }
             if (!session.active) return;
             const node = new AudioWorkletNode(context, 'live-whisper-chunks', {
-                processorOptions: { chunkSeconds: 3 }
+                processorOptions: { chunkSeconds: 5 }
             });
             node.port.onmessage = event => {
                 if (event.data?.type === 'flushed') {
@@ -619,7 +619,7 @@ async function startLiveTranscription(audioTrack, index) {
                 const part = new Float32Array(event.inputBuffer.getChannelData(0));
                 parts.push(part);
                 frames += part.length;
-                if (frames >= context.sampleRate * 3) {
+                if (frames >= context.sampleRate * 5) {
                     const chunk = new Float32Array(frames);
                     let offset = 0;
                     for (const saved of parts) {
