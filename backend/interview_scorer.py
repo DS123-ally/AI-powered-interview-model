@@ -57,7 +57,7 @@ class InterviewScorer:
     """Generates comprehensive interview scores — with API or rule-based fallback"""
 
     def __init__(self, api_key: Optional[str] = None, endpoint: Optional[str] = None):
-        self.model = os.getenv("OLLAMA_MODEL", "llama3")
+        self.model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip('/')
         self.endpoint = endpoint or f"{base}/api/chat"
         self.use_ai = True

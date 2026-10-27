@@ -5,7 +5,7 @@ An intelligent, fully localized technical and behavioral interview simulation mo
 ## Features
 - **Dynamic Question Generation**: Creates targeted interview questions based on the candidate's profile and CV using the local Ollama LLM.
 - **Audio Transcription & Tone Analysis**: Transcribes answers offline via OpenAI's Whisper model (`base` size) and uses `librosa` to analyze speech rates, pitch, and energy.
-- **AI Scoring & Feedback**: Evaluates the transcribed answers locally on your machine using Ollama (`llama3`).
+- **AI Scoring & Feedback**: Evaluates the transcribed answers locally on your machine using Ollama (`llama3.1:8b` by default).
 - **Body Language & Video Analysis**: Employs backend OpenCV & MediaPipe techniques to evaluate eye contact, shoulder alignment, and spine angle. 
 - **Real-Time Distraction Alert**: The browser dynamically runs a frontend MediaPipe face detection model from the camera feed while recording, instantly flashing an alert if there are multiple people or zero people in the frame in real-time.
 
@@ -27,7 +27,7 @@ The system has been completely decoupled from cloud APIs (Groq) to ensure data p
 3. **Ollama** installed on your system.
     - Start it in a background terminal by pulling/running the model at least once:
       ```powershell
-      ollama run llama3
+      ollama pull llama3.1:8b
       ```
 
 ### 1. Backend Setup
@@ -50,6 +50,7 @@ pip install -r requirements.txt
 # While the venv is activated and you are in the backend/ folder:
 python main.py
 ```
+If you use a different installed Ollama model, set `OLLAMA_MODEL` before starting the backend (for example, `$env:OLLAMA_MODEL = "qwen2.5-coder:7b"`). The default question-generation timeout is 180 seconds; set `OLLAMA_QUESTION_TIMEOUT` to adjust it for a slower machine.
 *Note: The first time it runs, the Whisper model weights (~74 MB) will be securely compiled/downloaded locally. Do not cancel the script while it reads `Loading Whisper model...`.*
 
 ### 3. Start the Frontend 

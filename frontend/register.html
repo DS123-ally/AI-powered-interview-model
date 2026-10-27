@@ -306,7 +306,7 @@ button[type="submit"]:disabled {
 </div>
 
 <script>
-const BACKEND_URL = "http://localhost:8000";
+const BACKEND_URL = window.BACKEND_URL || "http://127.0.0.1:8000";
 
 function showFieldError(id, show) {
   document.getElementById(id).classList.toggle('visible', show);
@@ -337,7 +337,7 @@ document.getElementById('registerForm').addEventListener('submit', async functio
   let valid = true;
   if (name.length < 2)                                    { showFieldError('nameError', true); valid = false; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))         { showFieldError('emailError', true); valid = false; }
-  if (!qual)                                              { showFieldError('qualificationError', true); valid = false; }
+  if (qual.length < 5)                                    { showFieldError('qualificationError', true); valid = false; }
   if (jobDesc.length < 10)                                { showFieldError('jobError', true); valid = false; }
   if (!valid) return;
 
@@ -361,6 +361,9 @@ document.getElementById('registerForm').addEventListener('submit', async functio
     }
 
     const data = await res.json();
+    if (data.generation_method !== 'ai-ollama') {
+      throw new Error(data.warning || 'Ollama could not generate questions. Check that Ollama is running and OLLAMA_MODEL names an installed model, then try again.');
+    }
 
     // ── Persist candidate info so interview.html can pick it up ──
     sessionStorage.setItem('candidateEmail', email);
@@ -384,8 +387,8 @@ document.getElementById('registerForm').addEventListener('submit', async functio
   } catch (err) {
     const errBox = document.getElementById('apiError');
     errBox.classList.add('visible');
-    errBox.innerHTML = `<strong>❌ Error:</strong> ${err.message}<br>
-      <small>Ensure the backend is running at <code>${BACKEND_URL}</code></small>`;
+    const hint = err instanceof TypeError ? ` Check that the backend is running at ${BACKEND_URL}.` : '';
+    errBox.textContent = `Error: ${err.message}${hint}`;
     setLoading(false);
   }
 });

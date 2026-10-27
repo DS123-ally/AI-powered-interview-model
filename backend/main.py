@@ -112,18 +112,11 @@ class CandidateRegistration(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     print("\n" + "="*70)
-    print("  🎙️ + 🎥  AI VOICE + VIDEO INTERVIEW BACKEND  v4.2")
+    print("  AI VOICE + VIDEO INTERVIEW BACKEND  v4.2")
     print("="*70)
-    if groq_key:
-        fmt = "✅ LOADED"
-        print(f"  GROQ Key   : {fmt}  |  {groq_key[:12]}...({len(groq_key)} chars)")
-        print(f"  Audio Score: AI-powered (with rule-based fallback)")
-        print(f"  Video Score: AI-powered body language analysis")
-        print(f"  Questions  : AI-generated per candidate ✨")
-        print(f"  Timings    : AI-predicted per question ✨")
-    else:
-        print(f"  GROQ Key   : ❌ NOT SET — using rule-based fallbacks")
-        print(f"  → Set the environment variable GROQ_API_KEY to enable AI features.")
+    print(f"  Ollama model: {question_generator.model}")
+    print(f"  Ollama API  : {question_generator.endpoint}")
+    print("  Questions and timings: generated per candidate")
     print("="*70 + "\n")
 
 
@@ -181,12 +174,12 @@ def favicon():
 # Route — Candidate Registration + Question Generation
 # ══════════════════════════════════════════════════════════════════
 @app.post("/generate-questions")
-async def generate_questions(candidate: CandidateRegistration):
+def generate_questions(candidate: CandidateRegistration):
     """
     Called by register.html on form submission.
 
     1. Receives candidate details.
-    2. Calls Groq to generate tailored questions + predicted timings.
+    2. Calls Ollama to generate tailored questions + predicted timings.
     3. Stores both in per-candidate dictionaries keyed by email.
     4. Returns questions + timings to the frontend.
     """
@@ -395,12 +388,12 @@ async def analyze_answer(
 # ══════════════════════════════════════════════════════════════════
 @app.exception_handler(HTTPException)
 async def http_handler(req, exc):
-    return JSONResponse(exc.status_code, {"error": exc.detail})
+    return JSONResponse(content={"error": exc.detail}, status_code=exc.status_code)
 
 @app.exception_handler(Exception)
 async def general_handler(req, exc):
     logger.error(f"Unhandled: {exc}", exc_info=True)
-    return JSONResponse(500, {"error": "Internal server error"})
+    return JSONResponse(content={"error": "Internal server error"}, status_code=500)
 
 
 # ══════════════════════════════════════════════════════════════════

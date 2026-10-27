@@ -51,10 +51,11 @@ class questionGenerator:
 
     def __init__(self, api_key=None):
         # Allow overriding model and endpoint via env vars
-        self.model = os.getenv("OLLAMA_MODEL", "llama3")
+        self.model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip('/')
         self.endpoint = f"{base}/api/chat"
-        self.timeout = 60
+        # A cold start on a local CPU can take longer than a cloud request.
+        self.timeout = int(os.getenv("OLLAMA_QUESTION_TIMEOUT", "180"))
 
         logger.info(f"🦙 Ollama question generator initialized using model {self.model} at {self.endpoint}")
 
@@ -91,7 +92,9 @@ class questionGenerator:
 
             if not questions:
                 logger.warning("Ollama returned no parseable questions — using fallback")
-                return self._fallback(qualification, job_description)
+                fallback = self._fallback(qualification, job_description)
+                fallback["error"] = "Ollama returned no usable questions. Check the backend log for the model response."
+                return fallback
 
             timings = self._normalise_timings(timings, len(questions))
 
@@ -193,9 +196,16 @@ The arrays must be the same length ({question_count} items each).
         try:
             parsed = json.loads(clean)
             if isinstance(parsed, dict):
-                questions  = parsed.get("questions", [])
-                seconds    = parsed.get("predicted_seconds", [])
-                timings_ms = [int(s) * 1000 for s in seconds if isinstance(s, (int, float, str)) and str(s).isdigit()]
+                raw_questions = parsed.get("questions", [])
+                questions = [q.strip() for q in raw_questions if isinstance(q, str) and q.strip()] if isinstance(raw_questions, list) else []
+                seconds = parsed.get("predicted_seconds", [])
+                timings_ms = []
+                if isinstance(seconds, list):
+                    for value in seconds:
+                        try:
+                            timings_ms.append(int(float(value) * 1000))
+                        except (TypeError, ValueError):
+                            timings_ms.append(DEFAULT_TIME_MS)
                 return {"questions": questions, "timings_ms": timings_ms}
 
             if isinstance(parsed, list):
