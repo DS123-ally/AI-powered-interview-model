@@ -14,6 +14,10 @@ let answerHistory = null;
 let faceDetection = null;
 let isDetectingFaces = false;
 let faceDetectionInFlight = false;
+let faceDetectionTimer = null;
+let faceDetectionFailures = 0;
+let faceDetectionRun = 0;
+const FACE_DETECTION_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4.1646425229';
 
 let interviewActive = false;
 let answers = [];
@@ -100,6 +104,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (skipBtn)  skipBtn.disabled  = true;
     if (stopBtn)  stopBtn.disabled  = true;
 
+    initializeFaceDetection();
+
     // ── Request camera + mic permission ONCE upfront ──────────────
     try {
         permissionStream = await navigator.mediaDevices.getUserMedia({
@@ -113,36 +119,60 @@ document.addEventListener('DOMContentLoaded', async () => {
         permissionStream = null;
     }
 
-    // ── Initialize MediaPipe Face Detection ──────────────
+});
+
+function initializeFaceDetection() {
     try {
+        if (typeof FaceDetection !== 'function') throw new Error('MediaPipe script did not load');
         faceDetection = new FaceDetection({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
+            locateFile: (file) => `${FACE_DETECTION_BASE}/${file}`
         });
-
-        // Keep compatibility with different MediaPipe builds.
-        try {
-            faceDetection.setOptions({
-                modelSelection: 0,
-                minDetectionConfidence: 0.5
-            });
-        } catch (_) {
-            faceDetection.setOptions({
-                model: 'short',
-                minDetectionConfidence: 0.5
-            });
-        }
-
+        faceDetection.setOptions({ model: 'short', minDetectionConfidence: 0.5 });
         faceDetection.onResults(onFaceResults);
     } catch (e) {
-        console.warn('⚠️ Face detection init failed; distraction alerts won\'t run:', e);
+        faceDetection = null;
+        console.warn('Face detection init failed:', e);
     }
-});
+}
+
+function showFaceMonitoringUnavailable() {
+    const alertBox = document.getElementById('distractionAlert');
+    if (!alertBox) return;
+    alertBox.textContent = 'Face monitoring is unavailable. Check your connection and reload the page.';
+    alertBox.style.background = '#b45309';
+    alertBox.style.display = 'block';
+}
+
+function startFaceDetection() {
+    stopFaceDetection();
+    if (!faceDetection) {
+        showFaceMonitoringUnavailable();
+        return;
+    }
+    faceDetectionFailures = 0;
+    isDetectingFaces = true;
+    processVideoFrame();
+}
+
+function stopFaceDetection() {
+    faceDetectionRun++;
+    isDetectingFaces = false;
+    if (faceDetectionTimer !== null) clearTimeout(faceDetectionTimer);
+    faceDetectionTimer = null;
+    const alertBox = document.getElementById('distractionAlert');
+    if (alertBox) alertBox.style.display = 'none';
+}
 
 function onFaceResults(results) {
     const alertBox = document.getElementById('distractionAlert');
     if (!isDetectingFaces || !alertBox) return;
     
-    if (!results.detections || results.detections.length !== 1) {
+    const count = results.detections?.length || 0;
+    if (count !== 1) {
+        alertBox.textContent = count === 0
+            ? 'No face detected. Please face the camera.'
+            : 'Multiple faces detected. Please ensure only you are visible.';
+        alertBox.style.background = '#ef4444';
         alertBox.style.display = 'block';
     } else {
         alertBox.style.display = 'none';
@@ -155,22 +185,32 @@ function processVideoFrame() {
     if (!isDetectingFaces) return;
 
     // Keep polling while recording so detection starts as soon as video is ready.
-    if (!video || video.paused || video.ended || video.readyState < 2 || !faceDetection) {
-        setTimeout(processVideoFrame, 250);
+    if (!video || video.paused || video.ended || video.readyState < 2) {
+        faceDetectionTimer = setTimeout(processVideoFrame, 250);
         return;
     }
 
     if (!faceDetectionInFlight) {
         faceDetectionInFlight = true;
-        faceDetection
-            .send({ image: video })
-            .catch((e) => console.warn('Face track err', e))
+        const run = faceDetectionRun;
+        Promise.resolve()
+            .then(() => faceDetection.send({ image: video }))
+            .then(() => { if (run === faceDetectionRun) faceDetectionFailures = 0; })
+            .catch((e) => {
+                if (run !== faceDetectionRun) return;
+                console.warn('Face detection failed:', e);
+                faceDetectionFailures++;
+                if (faceDetectionFailures >= 3 && isDetectingFaces) {
+                    stopFaceDetection();
+                    showFaceMonitoringUnavailable();
+                }
+            })
             .finally(() => {
                 faceDetectionInFlight = false;
             });
     }
 
-    setTimeout(processVideoFrame, 250); // ~4 checks/second
+    faceDetectionTimer = setTimeout(processVideoFrame, 250); // ~4 checks/second
 }
 
 function setPill(state, text) {
@@ -372,6 +412,7 @@ function startInterview() {
 async function skipQuestion() {
     if (!interviewActive) return;
     stopLiveTranscription();
+    stopFaceDetection();
     if (mediaRecorder && mediaRecorder.state === 'recording') {
         clearTimeout(recordingTimeout);
         mediaRecorder.stop();
@@ -389,6 +430,7 @@ async function skipQuestion() {
 function stopInterview() {
     if (confirm('Are you sure you want to end the interview early?')) {
         stopLiveTranscription();
+        stopFaceDetection();
         interviewActive = false;
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             clearTimeout(recordingTimeout);
@@ -737,10 +779,7 @@ async function startRecording() {
                 if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
             }, currentQuestionTimingMs);
 
-            // Start processing faces
-            isDetectingFaces = true;
-            faceDetectionInFlight = false;
-            processVideoFrame();
+            startFaceDetection();
         };
 
         mediaRecorder.start();
@@ -779,10 +818,7 @@ function stopRecording() {
         const videoCard = document.getElementById('videoPreviewCard');
         if (videoCard) videoCard.style.display = 'none';
 
-        isDetectingFaces = false;
-        faceDetectionInFlight = false;
-        const alertBox = document.getElementById('distractionAlert');
-        if (alertBox) alertBox.style.display = 'none';
+        stopFaceDetection();
 
     }
 }
@@ -933,6 +969,7 @@ async function completeInterview() {
     isCompleting = true;
     interviewActive = false;
     stopLiveTranscription();
+    stopFaceDetection();
     statusText.innerText   = 'Interview completed!';
     questionText.innerText = 'Thank you for completing the interview!';
     answerText.innerText   = '';
@@ -963,6 +1000,7 @@ async function completeInterview() {
 function resetInterview() {
     interviewActive = false;
     stopLiveTranscription();
+    stopFaceDetection();
     closeLiveAudio();
     if (startBtn) startBtn.disabled = false;
     if (skipBtn)  skipBtn.disabled  = true;
@@ -1135,6 +1173,7 @@ function handleVisibilityChange() {
 /** Hard-stop the interview due to a security violation */
 function terminateForTabSwitch() {
     stopLiveTranscription();
+    stopFaceDetection();
     closeLiveAudio();
     if (mediaRecorder && mediaRecorder.state === 'recording') {
         clearTimeout(recordingTimeout);

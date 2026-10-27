@@ -84,9 +84,7 @@
     </div>
 
     <!-- Real-time Distraction Alert -->
-    <div id="distractionAlert" style="display:none; text-align:center; background:#ef4444; color:white; padding:12px; border-radius:8px; font-weight:600; margin-bottom:16px; box-shadow:0 4px 12px rgba(239, 68, 68, 0.4); letter-spacing:0.5px;">
-        ⚠️ Distraction Detected: Please ensure exactly ONE face is clearly visible!
-    </div>
+    <div id="distractionAlert" role="alert" aria-live="assertive" style="display:none; text-align:center; background:#ef4444; color:white; padding:12px; border-radius:8px; font-weight:600; margin-bottom:16px; box-shadow:0 4px 12px rgba(239, 68, 68, 0.4); letter-spacing:0.5px;"></div>
 
     <!-- Video preview (shows during recording) -->
     <div class="card card-video" id="videoPreviewCard" style="display:none;">
@@ -246,7 +244,7 @@
 .orb-label.talking  { color: var(--accent); }
 .orb-label.recording{ color: var(--red); }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4.1646425229/face_detection.js" crossorigin="anonymous"></script>
 <script src="script.js"></script>
 </body>
 </html>

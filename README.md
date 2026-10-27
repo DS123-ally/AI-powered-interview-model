@@ -9,7 +9,7 @@ An intelligent, fully localized technical and behavioral interview simulation mo
 - **Live Whisper captions**: While you answer, the browser sends five-second PCM audio chunks to a fast local Whisper `tiny.en` model. Longer chunks preserve more speech context and reduce errors at word boundaries. Each complete answer stays visible below the question and is replaced by the more accurate `base` model transcript when background analysis finishes. The first run may download the `tiny.en` model (about 72 MB).
 - **AI Scoring & Feedback**: Evaluates the transcribed answers locally on your machine using Ollama (`llama3.1:8b` by default).
 - **Body Language & Video Analysis**: Employs backend OpenCV & MediaPipe techniques to evaluate eye contact, shoulder alignment, and spine angle. 
-- **Real-Time Distraction Alert**: The browser dynamically runs a frontend MediaPipe face detection model from the camera feed while recording, instantly flashing an alert if there are multiple people or zero people in the frame in real-time.
+- **Real-Time Distraction Alert**: During recording, the browser checks the camera about four times per second with MediaPipe Face Detection and warns when no face or multiple faces are visible. The page shows a monitoring-unavailable message if the browser model cannot load. The browser downloads the pinned MediaPipe assets from jsDelivr, so this feature requires internet access on first load.
 
 ---
 
