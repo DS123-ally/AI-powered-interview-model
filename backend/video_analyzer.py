@@ -132,6 +132,7 @@ class VideoAnalyzer:
         self.model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip('/')
         self.endpoint = endpoint or f"{base}/api/chat"
+        self.timeout = int(os.getenv("OLLAMA_VIDEO_TIMEOUT", "240"))
         self.use_ai = True
 
         logger.info(f"✅ VideoAnalyzer ready (Ollama {self.model})")
@@ -224,7 +225,7 @@ CRITICAL: Return ONLY the JSON object. No markdown code blocks. No explanatory t
         }
 
         logger.info(f"🌐 Calling Ollama for video assessment (model={self.model})")
-        resp = requests.post(self.endpoint, headers=headers, json=payload, timeout=60)
+        resp = requests.post(self.endpoint, headers=headers, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
 

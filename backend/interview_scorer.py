@@ -60,6 +60,7 @@ class InterviewScorer:
         self.model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip('/')
         self.endpoint = endpoint or f"{base}/api/chat"
+        self.timeout = int(os.getenv("OLLAMA_SCORING_TIMEOUT", "240"))
         self.use_ai = True
 
         logger.info(f"📊 InterviewScorer v3.0 ready (Ollama {self.model})")
@@ -77,6 +78,7 @@ class InterviewScorer:
             ai_parsed  = None
             ai_raw_text = ""
             used_ai    = False
+            ai_error   = None
 
             if self.use_ai:
                 try:
@@ -85,13 +87,27 @@ class InterviewScorer:
                     ai_raw_text  = self._call_api(prompt)
                     logger.info(f"📨 AI response (first 300 chars): {ai_raw_text[:300]}")
                     ai_parsed    = self._parse_ai_response(ai_raw_text)
+                    if not 1 <= ai_parsed["content_score"] <= 10:
+                        raise ValueError("Ollama did not return a valid content score")
+                    if not 1 <= ai_parsed["tone_score"] <= 10:
+                        ai_parsed["tone_score"] = (
+                            self._fallback_score(question, transcript, tone_analysis, local_metrics)["tone_score"]
+                            if tone_summary != "Tone data unavailable" else 5.0
+                        )
+                        logger.warning("Ollama omitted a numeric tone score; using local tone estimate")
+                        ai_parsed["overall_score"] = 0
+                    if not 1 <= ai_parsed["overall_score"] <= 10:
+                        ai_parsed["overall_score"] = round(
+                            ai_parsed["content_score"] * 0.6 + ai_parsed["tone_score"] * 0.4, 1
+                        )
                     used_ai      = True
                     logger.info(
                         f"✅ AI scores: content={ai_parsed.get('content_score')} "
                         f"tone={ai_parsed.get('tone_score')} overall={ai_parsed.get('overall_score')}"
                     )
                 except Exception as e:
-                    logger.error(f"❌ AI scoring failed ({e}) — switching to rule-based fallback")
+                    ai_error = str(e)
+                    logger.error(f"❌ AI scoring failed ({e}) — switching to rule-based fallback", exc_info=True)
                     ai_parsed = None
 
             if ai_parsed is None:
@@ -108,6 +124,7 @@ class InterviewScorer:
                 "tone_analysis":    tone_analysis,
                 "ai_feedback":      ai_raw_text,
                 "scoring_method":   "ai" if used_ai else "rule_based_fallback",
+                "scoring_error":    ai_error,
                 # Scores
                 "content_score":    round(float(ai_parsed.get("content_score", 0)), 1),
                 "tone_score":       round(float(ai_parsed.get("tone_score", 0)), 1),
@@ -397,6 +414,7 @@ TONE SCORE (1-10):
   RULE: Any audible, understandable answer scores at least 4 on tone.
 
 OVERALL SCORE: Content 60% + Tone 40% (use judgment, not just arithmetic)
+All three scores must be numbers from 1 to 10. If tone data is unavailable, use a neutral tone score of 5. Never write N/A.
 
 INTERVIEW QUESTION: {question}
 
@@ -456,7 +474,7 @@ FEEDBACK:
         
         try:
             logger.info(f"🌐 Calling Ollama {self.endpoint} (model={self.model})")
-            resp = requests.post(self.endpoint, headers=headers, json=payload, timeout=60)
+            resp = requests.post(self.endpoint, headers=headers, json=payload, timeout=self.timeout)
             resp.raise_for_status()
             data = resp.json()
             content = data.get("message", {}).get("content", "")
@@ -468,7 +486,7 @@ FEEDBACK:
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Ollama request error: {e}")
-            raise RuntimeError("Ollama API failed") from e
+            raise RuntimeError(f"Ollama request failed: {e}") from e
 
     # ══════════════════════════════════════════════════════════════
     # RESPONSE PARSER

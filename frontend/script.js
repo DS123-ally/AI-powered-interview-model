@@ -526,7 +526,7 @@ function stopRecording() {
         mediaRecorder.stop();
         videoRecorder.stop();
         indicator.classList.remove('recording');
-        statusText.innerText = 'Processing…';
+        statusText.innerText = 'Transcribing and scoring locally — this may take a few minutes…';
         setOrb('idle', 'Processing…');
 
         const videoCard = document.getElementById('videoPreviewCard');

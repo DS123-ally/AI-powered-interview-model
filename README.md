@@ -51,6 +51,7 @@ pip install -r requirements.txt
 python main.py
 ```
 If you use a different installed Ollama model, set `OLLAMA_MODEL` before starting the backend (for example, `$env:OLLAMA_MODEL = "qwen2.5-coder:7b"`). The default question-generation timeout is 180 seconds; set `OLLAMA_QUESTION_TIMEOUT` to adjust it for a slower machine.
+Answer and video scoring can take longer on a local CPU. Their default Ollama timeouts are 240 seconds; adjust them with `OLLAMA_SCORING_TIMEOUT` and `OLLAMA_VIDEO_TIMEOUT` if needed.
 *Note: The first time it runs, the Whisper model weights (~74 MB) will be securely compiled/downloaded locally. Do not cancel the script while it reads `Loading Whisper model...`.*
 
 ### 3. Start the Frontend 
@@ -70,4 +71,4 @@ python -m http.server 3000
 
 ## Important Usage Note
 Since all Whisper Transcription and AI Response generation logic operates seamlessly offline on your local CPU (or GPU depending on your hardware config):
-- **Processing Time:** While the camera records, it buffers the video directly. Processing happens *after* you finish recording. When you see **"Processing..."** on the screen, wait ~15 to 45 seconds for your native processor to evaluate the models!
+- **Processing Time:** While the camera records, it buffers the video directly. Processing happens *after* you finish recording. Whisper transcription, answer scoring, and video assessment run in sequence and can take several minutes on a local CPU. Keep the interview page open while it shows **"Processing..."**.
