@@ -16,6 +16,7 @@ import re
 import json
 import logging
 import requests
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class questionGenerator:
 
     def __init__(self, api_key=None):
         # Allow overriding model and endpoint via env vars
-        self.model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+        self.model = os.getenv("OLLAMA_QUESTION_MODEL") or os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         base = os.getenv("OLLAMA_API_BASE", "http://localhost:11434").rstrip('/')
         self.endpoint = f"{base}/api/chat"
         # A cold start on a local CPU can take longer than a cloud request.
@@ -83,7 +84,7 @@ class questionGenerator:
         try:
             logger.info(f"🚀 Starting question generation with Ollama (count={question_count}, model={self.model})")
             prompt = self._build_prompt(qualification, job_description, candidate_name, question_count)
-            raw    = self._call_api(prompt)
+            raw    = self._call_api(prompt, question_count)
             logger.info(f"✅ Ollama returned response (length: {len(raw)} chars)")
 
             parsed    = self._parse_response(raw)
@@ -96,7 +97,7 @@ class questionGenerator:
                 fallback["error"] = "Ollama returned no usable questions. Check the backend log for the model response."
                 return fallback
 
-            timings = self._normalise_timings(timings, len(questions))
+            timings = self._normalise_timings(timings, questions)
 
             logger.info(f"✅ AI generated {len(questions)} questions with timings: {timings}")
             return {
@@ -122,44 +123,23 @@ class questionGenerator:
     # ──────────────────────────────────────────────────────────────
     def _build_prompt(self, qualification: str, job_description: str,
                       candidate_name: str, question_count: int) -> str:
-        name_line = f"Candidate name: {candidate_name}\n" if candidate_name else ""
-        return f"""You are an expert HR interviewer and communication coach.
+        def concise(value: str, limit: int) -> str:
+            value = " ".join(value.split())
+            return value if len(value) <= limit else value[:limit].rsplit(" ", 1)[0]
 
-Your task is to generate exactly {question_count} interview questions for a candidate based on the details below, and for each question predict how many SECONDS a well-prepared candidate would need to answer it fully.
+        qualification = concise(qualification, 500)
+        job_description = concise(job_description, 900)
+        json_questions = ",".join(f'"question {index + 1}?"' for index in range(question_count))
+        return (
+            f"Write exactly {question_count} concise, open-ended interview questions. "
+            "Two must test skills for the job; one must ask for a specific past situation. "
+            "Ask questions that reveal clear communication. Each question must be at most 18 words. "
+            f"Return only JSON: {{\"questions\":[{json_questions}]}}. "
+            f"Qualification: {qualification}. Job: {job_description}."
+        )
 
-{name_line}Candidate Qualification:
-{qualification}
-
-Job Description:
-{job_description}
-
-Requirements for the questions:
-1. Each question must assess the candidate's COMMUNICATION SKILLS (clarity, structure, confidence, listening, articulation).
-2. At least 2 questions should be role-specific, probing knowledge relevant to the job.
-3. At least 1 question should be a behavioral / situational question (STAR method).
-4. Questions must be open-ended (no yes/no answers).
-5. Keep each question concise (1–2 sentences max).
-
-Timing guidelines for predicted_seconds:
-- Simple factual / introductory questions (e.g. "Tell me about yourself"): 60–90 s
-- Behavioral / STAR questions (e.g. "Describe a challenging situation"): 90–120 s
-- Technical / in-depth knowledge questions: 90–100 s
-- Motivational / goal questions: 45–75 s
-- Minimum allowed: 30 s. Maximum allowed: 150 s.
-
-Respond ONLY with a valid JSON object in this exact format (no markdown fences, no extra text):
-{{
-  "questions": [
-    "Question one?",
-    "Question two?"
-  ],
-  "predicted_seconds": [75, 120]
-}}
-
-The arrays must be the same length ({question_count} items each).
-"""
-
-    def _call_api(self, prompt: str) -> str:
+    @lru_cache(maxsize=128)
+    def _call_api(self, prompt: str, question_count: int) -> str:
         headers = {"Content-Type": "application/json"}
         payload = {
             "model": self.model,
@@ -167,8 +147,10 @@ The arrays must be the same length ({question_count} items each).
             "format": "json",
             "stream": False,
             "options": {
-                "temperature": 0.7
-            }
+                "temperature": 0.2,
+                "num_predict": max(192, question_count * 55),
+            },
+            "keep_alive": "15m",
         }
 
         resp = requests.post(
@@ -181,7 +163,12 @@ The arrays must be the same length ({question_count} items each).
 
         data = resp.json()
         content = data.get("message", {}).get("content", "").strip()
-        logger.info(f"Successfully retrieved {len(content)} chars from Ollama")
+        logger.info(
+            "Ollama questions: %d chars, load %.1fs, prompt %.1fs, output %.1fs (%s tokens)",
+            len(content), data.get("load_duration", 0) / 1e9,
+            data.get("prompt_eval_duration", 0) / 1e9,
+            data.get("eval_duration", 0) / 1e9, data.get("eval_count", "unknown"),
+        )
         return content
 
     def _parse_response(self, raw: str) -> dict:
@@ -225,14 +212,14 @@ The arrays must be the same length ({question_count} items each).
 
         return {"questions": questions, "timings_ms": []}
 
-    def _normalise_timings(self, timings_ms: list, count: int) -> list:
+    def _normalise_timings(self, timings_ms: list, questions: list[str]) -> list:
         result = []
-        for i in range(count):
+        for i, question in enumerate(questions):
             if i < len(timings_ms):
                 val = int(timings_ms[i])
                 val = max(MIN_TIME_MS, min(MAX_TIME_MS, val))
             else:
-                val = DEFAULT_TIME_MS
+                val = self.predict_time_ms(question)
             result.append(val)
         return result
 

@@ -372,19 +372,7 @@ document.getElementById('registerForm').addEventListener('submit', async functio
     sessionStorage.setItem('generatedQuestions', JSON.stringify(data.questions || []));
     sessionStorage.setItem('generatedTimings', JSON.stringify(data.timings_ms || []));
 
-    // ── Show redirect countdown ──
-    this.style.display = 'none';
-    const box = document.getElementById('redirectBox');
-    box.classList.add('visible');
-
-    // Animate progress bar then redirect
-    requestAnimationFrame(() => {
-      document.getElementById('redirectBar').style.width = '100%';
-    });
-
-    setTimeout(() => {
-      window.location.href = 'interview.html';
-    }, 2700);
+    window.location.assign('interview.html');
 
   } catch (err) {
     const errBox = document.getElementById('apiError');

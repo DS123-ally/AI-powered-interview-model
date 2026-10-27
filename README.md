@@ -52,7 +52,7 @@ pip install -r requirements.txt
 # While the venv is activated and you are in the backend/ folder:
 python main.py
 ```
-If you use a different installed Ollama model, set `OLLAMA_MODEL` before starting the backend (for example, `$env:OLLAMA_MODEL = "qwen2.5-coder:7b"`). The default question-generation timeout is 180 seconds; set `OLLAMA_QUESTION_TIMEOUT` to adjust it for a slower machine.
+Question generation uses a short prompt and asks Ollama for three concise questions; answer times are estimated locally. Successful repeated requests with the same profile are cached while the backend stays running. Ollama stays loaded for 15 minutes after question generation to reduce later cold starts. If you use a different installed Ollama model, set `OLLAMA_MODEL` before starting the backend. To change only the question model, set `OLLAMA_QUESTION_MODEL` (for example, `$env:OLLAMA_QUESTION_MODEL = "qwen2.5-coder:7b"`). The default question-generation timeout is 180 seconds; set `OLLAMA_QUESTION_TIMEOUT` to adjust it for a slower machine.
 Answer and video scoring can take longer on a local CPU. Their default Ollama timeouts are 240 seconds; adjust them with `OLLAMA_SCORING_TIMEOUT` and `OLLAMA_VIDEO_TIMEOUT` if needed.
 *Note: The first time it runs, the Whisper model weights (~74 MB) will be securely compiled/downloaded locally. Do not cancel the script while it reads `Loading Whisper model...`.*
 
