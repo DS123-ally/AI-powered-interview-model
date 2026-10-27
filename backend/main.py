@@ -73,8 +73,6 @@ DEFAULT_HR_QUESTIONS = [
     "Tell me about yourself and your professional background.",
     "What would you say are your top three strengths, and can you give a specific example for at least one?",
     "Describe a challenging situation you faced at work or school and explain how you handled it.",
-    "Why should we hire you over other candidates for this role?",
-    "Where do you see yourself professionally in the next five years?",
 ]
 
 # Default timings for the standard HR questions (milliseconds)
@@ -82,8 +80,6 @@ DEFAULT_HR_TIMINGS_MS = [
     90_000,   # Tell me about yourself          → 90 s
     75_000,   # Top three strengths             → 75 s
     90_000,   # Challenging situation (STAR)    → 90 s
-    75_000,   # Why should we hire you          → 75 s
-    60_000,   # Where in five years             → 60 s
 ]
 
 # ── Per-candidate stores (keyed by email) ──────────────────────────
@@ -103,7 +99,7 @@ class CandidateRegistration(BaseModel):
     email:           str
     qualification:   str
     job_description: str
-    question_count:  int = 5
+    question_count:  int = 3
 
 
 # ══════════════════════════════════════════════════════════════════

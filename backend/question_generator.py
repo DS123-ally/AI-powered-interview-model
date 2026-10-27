@@ -47,7 +47,7 @@ class questionGenerator:
     answer duration so the frontend can set dynamic recording windows.
     """
 
-    DEFAULT_QUESTION_COUNT = 5
+    DEFAULT_QUESTION_COUNT = 3
 
     def __init__(self, api_key=None):
         # Allow overriding model and endpoint via env vars
@@ -87,12 +87,12 @@ class questionGenerator:
             logger.info(f"✅ Ollama returned response (length: {len(raw)} chars)")
 
             parsed    = self._parse_response(raw)
-            questions = parsed.get("questions", [])
-            timings   = parsed.get("timings_ms", [])
+            questions = parsed.get("questions", [])[:question_count]
+            timings   = parsed.get("timings_ms", [])[:question_count]
 
             if not questions:
                 logger.warning("Ollama returned no parseable questions — using fallback")
-                fallback = self._fallback(qualification, job_description)
+                fallback = self._fallback(qualification, job_description, question_count)
                 fallback["error"] = "Ollama returned no usable questions. Check the backend log for the model response."
                 return fallback
 
@@ -107,13 +107,13 @@ class questionGenerator:
 
         except requests.exceptions.ConnectionError:
             logger.error(f"❌ Connection error: Could not reach Ollama at {self.endpoint}. Is it running?")
-            fallback = self._fallback(qualification, job_description)
+            fallback = self._fallback(qualification, job_description, question_count)
             fallback["error"] = "Cannot connect to local Ollama instance."
             return fallback
 
         except Exception as exc:
             logger.error(f"❌ Question generation failed: {exc}", exc_info=True)
-            fallback = self._fallback(qualification, job_description)
+            fallback = self._fallback(qualification, job_description, question_count)
             fallback["error"] = str(exc)
             return fallback
 
@@ -243,7 +243,7 @@ The arrays must be the same length ({question_count} items each).
                 return base_seconds * 1000
         return DEFAULT_TIME_MS
 
-    def _fallback(self, qualification: str, job_description: str) -> dict:
+    def _fallback(self, qualification: str, job_description: str, question_count: int = DEFAULT_QUESTION_COUNT) -> dict:
         """Generic communication-focused questions when AI is unavailable."""
         questions = [
             "Tell me about a situation where you had to handle a disagreement with a colleague. What was the outcome?",
@@ -253,6 +253,7 @@ The arrays must be the same length ({question_count} items each).
             
             "Where do you see yourself professionally in the next three to five years, and how does this role fit that vision?",
         ]
+        questions = questions[:question_count]
         timings_ms = [self.predict_time_ms(q) for q in questions]
         return {
             "questions":         questions,

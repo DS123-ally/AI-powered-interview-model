@@ -351,7 +351,8 @@ document.getElementById('registerForm').addEventListener('submit', async functio
         name,
         email,
         qualification:   qual,
-        job_description: jobDesc
+        job_description: jobDesc,
+        question_count: 3
       })
     });
 
@@ -369,6 +370,7 @@ document.getElementById('registerForm').addEventListener('submit', async functio
     sessionStorage.setItem('candidateEmail', email);
     sessionStorage.setItem('candidateName',  name);
     sessionStorage.setItem('generatedQuestions', JSON.stringify(data.questions || []));
+    sessionStorage.setItem('generatedTimings', JSON.stringify(data.timings_ms || []));
 
     // ── Show redirect countdown ──
     this.style.display = 'none';

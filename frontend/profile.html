@@ -969,7 +969,7 @@ function buildSessionCards() {
 
   document.getElementById('statCompleted').textContent = completed;
   document.getElementById('statAvgScore').textContent  = avg;
-  document.getElementById('statTotal').textContent     = storedSessions.length * 5 || 5;
+  document.getElementById('statTotal').textContent     = storedSessions.reduce((total, session) => total + (session.questions || 0), 0);
 }
 
 function calcAvg(answers) {
